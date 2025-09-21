@@ -79,7 +79,7 @@ class GaussianMixtureModel:
 
         self.ELBO = 0
 
-        self.omega = []
+        self.Lcal_q = []
 
         self.Z = np.zeros(shape = self.N)
 
@@ -329,7 +329,7 @@ class GaussianMixtureModel:
 
         self.ELBO -= self.E_log_q
 
-        self.omega.append(self.ELBO)
+        self.Lcal_q.append(self.ELBO)
 
     def estimate_Z(self) -> None:
 
@@ -376,6 +376,8 @@ class GaussianMixtureModel:
             if self.epsilon < TOL:
 
                 break
+
+        self.Lcal_q = np.array(self.Lcal_q)
 
         self.estimate_parameters()
 
