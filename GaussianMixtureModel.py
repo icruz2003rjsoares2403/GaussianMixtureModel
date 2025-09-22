@@ -1,4 +1,6 @@
 
+import time
+
 import numpy as np
 
 from scipy.special import psi
@@ -11,7 +13,7 @@ from sklearn.cluster import kmeans_plusplus
 
 class GaussianMixtureModel:
 
-    def __init__(self, X : np.ndarray, M : int):
+    def __init__(self, X : np.ndarray, M : int) -> None:
         
         self.X = X
 
@@ -25,7 +27,7 @@ class GaussianMixtureModel:
 
         self.mu_0 = np.zeros(shape = self.D)
 
-        self.nu_0 = self.D + 1
+        self.nu_0 = self.D + 2
 
         self.Sigma_0 = np.identity(n = self.D)
 
@@ -79,6 +81,8 @@ class GaussianMixtureModel:
 
         self.ELBO = 0
 
+        self.H = []
+
         self.Z = np.zeros(shape = self.N)
 
         self.pi = np.zeros(shape = self.M)
@@ -87,9 +91,11 @@ class GaussianMixtureModel:
 
         self.Lambda = np.zeros(shape = (self.M, self.D, self.D))
 
-        self.kappa = 0
+        self.F = 0
 
-        self.epsilon = 0
+        self.T = 0
+
+        self.delta = 0
 
     def initialize_parameters(self) -> None:
 
@@ -125,7 +131,7 @@ class GaussianMixtureModel:
 
         self.gamma = -self.nu*np.einsum('nmD, mDd, nmd -> nm', self.gamma, self.Psi, self.gamma)/2
 
-        self.gamma += self.E_log_pi + self.E_log_det_Lambda/2 -self.D/(2*self.tau)
+        self.gamma += self.E_log_pi + self.E_log_det_Lambda/2 - self.D/(2*self.tau)
 
         self.gamma = softmax(self.gamma, axis = 1)
 
@@ -327,6 +333,8 @@ class GaussianMixtureModel:
 
         self.ELBO -= self.E_log_q
 
+        self.H.append(self.ELBO)
+
     def estimate_Z(self) -> None:
 
         self.Z = np.argmax(self.gamma, axis = 1)
@@ -337,7 +345,7 @@ class GaussianMixtureModel:
 
     def estimate_Sigma(self) -> None:
 
-        self.Sigma = self.Phi/(np.expand_dims(self.nu, axis = (1, 2)) + self.D + 1)
+        self.Sigma = self.Phi/(np.expand_dims(self.nu, axis = (1, 2)) - self.D - 1)
 
     def estimate_Lambda(self) -> None:
 
@@ -355,26 +363,34 @@ class GaussianMixtureModel:
 
     def fit_parameters(self, MAX : int = 100, TOL : float = 1e-3) -> None:
 
+        self.T = -time.time()
+
         self.initialize_parameters()
 
-        for self.kappa in range(MAX):
+        for self.F in np.arange(start = 1, stop = MAX + 1):
 
-            self.epsilon = self.mu.copy()
+            self.delta = self.ELBO
 
             self.update_parameters()
 
-            self.epsilon -= self.mu
+            self.update_ELBO()
 
-            self.epsilon = np.linalg.norm(self.epsilon, axis = 1).max()
+            self.delta -= self.ELBO
 
-            if self.epsilon < TOL:
+            self.delta = np.abs(self.delta/self.ELBO)
+            
+            if self.delta < TOL:
 
                 break
 
-        self.update_ELBO()
+        self.H = np.array(self.H)
 
         self.estimate_parameters()
 
-        print(f'\nNúmero Total de Iterações: {self.kappa}\n')
+        self.T += time.time()
 
-        print(f'Erro Absoluto Final: {self.epsilon}\n')
+        print(f'\nTempo Total em segundos: {self.T}\n')
+
+        print(f'Número Total de Iterações: {self.F}\n')
+
+        print(f'Erro Absoluto Relativo Final: {self.delta}\n')
