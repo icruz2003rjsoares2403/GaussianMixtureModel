@@ -79,8 +79,6 @@ class GaussianMixtureModel:
 
         self.ELBO = 0
 
-        self.Lcal_q = []
-
         self.Z = np.zeros(shape = self.N)
 
         self.pi = np.zeros(shape = self.M)
@@ -281,7 +279,7 @@ class GaussianMixtureModel:
 
     def update_E_log_q_Z(self) -> None:
 
-        self.E_log_q_Z = np.sum(self.gamma*np.log(self.gamma))
+        self.E_log_q_Z = np.log(self.gamma**self.gamma).sum()
 
     def update_E_log_q_mu_mid_Lambda(self) -> None:
 
@@ -329,8 +327,6 @@ class GaussianMixtureModel:
 
         self.ELBO -= self.E_log_q
 
-        self.Lcal_q.append(self.ELBO)
-
     def estimate_Z(self) -> None:
 
         self.Z = np.argmax(self.gamma, axis = 1)
@@ -341,7 +337,7 @@ class GaussianMixtureModel:
 
     def estimate_Sigma(self) -> None:
 
-        self.Sigma = self.Phi/(np.expand_dims(self.nu, axis = (1, 2)) - self.D - 1)
+        self.Sigma = self.Phi/(np.expand_dims(self.nu, axis = (1, 2)) + self.D + 1)
 
     def estimate_Lambda(self) -> None:
 
@@ -357,30 +353,28 @@ class GaussianMixtureModel:
 
         self.estimate_Lambda()
 
-    def fit_parameters(self, MAX : int = 1000, TOL : float = 1e-6) -> None:
+    def fit_parameters(self, MAX : int = 100, TOL : float = 1e-3) -> None:
 
         self.initialize_parameters()
 
         for self.kappa in range(MAX):
 
-            self.epsilon = self.ELBO
+            self.epsilon = self.mu.copy()
 
             self.update_parameters()
 
-            self.update_ELBO()
+            self.epsilon -= self.mu
 
-            self.epsilon -= self.ELBO
-
-            self.epsilon = np.abs(self.epsilon)
+            self.epsilon = np.linalg.norm(self.epsilon, axis = 1).max()
 
             if self.epsilon < TOL:
 
                 break
 
-        self.Lcal_q = np.array(self.Lcal_q)
+        self.update_ELBO()
 
         self.estimate_parameters()
 
-        print(f'Número Total de Iterações: {self.kappa}\n')
+        print(f'\nNúmero Total de Iterações: {self.kappa}\n')
 
-        print(f'Erro Absoluto Final: {self.epsilon}')
+        print(f'Erro Absoluto Final: {self.epsilon}\n')
