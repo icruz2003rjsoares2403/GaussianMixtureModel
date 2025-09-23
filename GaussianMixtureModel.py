@@ -4,7 +4,7 @@ import time
 import numpy as np
 
 from scipy.special import psi
-from scipy.special import gammaln
+from scipy.special import betaln
 from scipy.special import multigammaln
 
 from scipy.special import softmax
@@ -21,7 +21,9 @@ class GaussianMixtureModel:
 
         self.M = M
 
-        self.alpha_0 = 1/self.M
+        self.alpha_0 = 1
+
+        self.omega_0 = self.M
 
         self.tau_0 = 1
 
@@ -29,9 +31,9 @@ class GaussianMixtureModel:
 
         self.nu_0 = self.D + 2
 
-        self.Sigma_0 = np.identity(n = self.D)
+        self.Phi_0 = np.identity(n = self.D)
 
-        self.Lambda_0 = np.linalg.inv(self.Sigma_0)
+        self.Psi_0 = np.linalg.inv(self.Phi_0)
 
         self.E_log_pi = np.zeros(shape = self.M)
 
@@ -47,6 +49,8 @@ class GaussianMixtureModel:
 
         self.alpha = np.zeros(shape = self.M)
 
+        self.omega = np.zeros(shape = self.M)
+
         self.tau = np.zeros(shape = self.M)
 
         self.mu = np.zeros(shape = (self.M, self.D))
@@ -57,9 +61,9 @@ class GaussianMixtureModel:
 
         self.Psi = np.zeros(shape = (self.M, self.D, self.D))
 
-        self.E_log_p_pi = 0
+        self.E_log_p_B = 0
 
-        self.E_log_p_Z_mid_pi = 0
+        self.E_log_p_Z_mid_B = 0
 
         self.E_log_p_Lambda = 0
 
@@ -69,7 +73,7 @@ class GaussianMixtureModel:
 
         self.E_log_p = 0
 
-        self.E_log_q_pi = 0
+        self.E_log_q_B = 0
 
         self.E_log_q_Z = 0
 
@@ -81,7 +85,7 @@ class GaussianMixtureModel:
 
         self.ELBO = 0
 
-        self.ell = []
+        self.HISTORY = []
 
         self.Z = np.zeros(shape = self.N)
 
@@ -91,17 +95,19 @@ class GaussianMixtureModel:
 
         self.Lambda = np.zeros(shape = (self.M, self.D, self.D))
 
-        self.i = 0
+        self.ITER = 0
 
-        self.t = 0
+        self.Delta = 0
 
         self.RAE = 0
 
-        self.b = None
+        self.CONVERGED = None
 
     def initialize_parameters(self) -> None:
 
         self.alpha = np.repeat(self.alpha_0, repeats = self.M)
+
+        self.omega = np.repeat(self.omega_0, repeats = self.M)
 
         self.tau = np.repeat(self.tau_0, repeats = self.M)
 
@@ -109,15 +115,17 @@ class GaussianMixtureModel:
 
         self.nu = np.repeat(self.nu_0, repeats = self.M)
 
-        self.Phi = np.tile(self.Sigma_0, reps = (self.M, 1, 1))
+        self.Phi = np.tile(self.Phi_0, reps = (self.M, 1, 1))
 
-        self.Psi = np.tile(self.Lambda_0, reps = (self.M, 1, 1))
+        self.Psi = np.tile(self.Psi_0, reps = (self.M, 1, 1))
 
     def update_E_log_pi(self) -> None:
 
-        self.E_log_pi = psi(self.alpha)
+        self.E_log_pi = psi(self.alpha) - psi(self.alpha + self.omega)
 
-        self.E_log_pi -= psi(self.alpha.sum())
+        self.E_log_pi += np.cumsum(psi(self.omega) - psi(self.alpha + self.omega))
+
+        self.E_log_pi -= psi(self.omega) - psi(self.alpha + self.omega)
 
     def update_E_log_det_Lambda(self) -> None:
 
@@ -125,7 +133,7 @@ class GaussianMixtureModel:
 
         self.E_log_det_Lambda = psi(self.E_log_det_Lambda).sum(axis = 1)
 
-        self.E_log_det_Lambda += self.D*np.log(2) + np.log(np.linalg.det(self.Psi))
+        self.E_log_det_Lambda += self.D*np.log(2) + np.linalg.slogdet(self.Psi)[1]
 
     def update_gamma(self) -> None:
 
@@ -159,6 +167,12 @@ class GaussianMixtureModel:
 
         self.alpha = self.alpha_0 + self.N_barra
 
+    def update_omega(self) -> None:
+
+        self.omega = self.omega_0 + np.cumsum(self.N_barra[::-1])[::-1]
+
+        self.omega -= self.N_barra
+
     def update_tau(self) -> None:
 
         self.tau = self.tau_0 + self.N_barra
@@ -183,7 +197,7 @@ class GaussianMixtureModel:
 
         self.Phi += np.expand_dims(self.N_barra, axis = (1, 2))*self.S_barra
 
-        self.Phi += self.Sigma_0
+        self.Phi += self.Phi_0
 
     def update_Psi(self) -> None:
 
@@ -205,6 +219,8 @@ class GaussianMixtureModel:
 
         self.update_alpha()
 
+        self.update_omega()
+
         self.update_tau()
 
         self.update_mu()
@@ -215,23 +231,23 @@ class GaussianMixtureModel:
 
         self.update_Psi()
 
-    def update_E_log_p_pi(self) -> None:
+    def update_E_log_p_B(self) -> None:
 
-        self.E_log_p_pi = (self.alpha_0 - 1)*self.E_log_pi.sum()
+        self.E_log_p_B = (self.alpha_0 - 1)*np.sum(psi(self.alpha) - psi(self.alpha + self.omega))
 
-        self.E_log_p_pi += gammaln(self.M*self.alpha_0) - self.M*gammaln(self.alpha_0)
+        self.E_log_p_B -= self.M*betaln(self.alpha_0, self.omega_0)
 
-    def update_E_log_p_Z_mid_pi(self) -> None:
+    def update_E_log_p_Z_mid_B(self) -> None:
 
-        self.E_log_p_Z_mid_pi = np.sum(self.gamma @ self.E_log_pi)
+        self.E_log_p_Z_mid_B = np.sum(self.gamma @ self.E_log_pi)
 
     def update_E_log_p_Lambda(self) -> None:
 
         self.E_log_p_Lambda = (self.nu_0 - self.D - 1)/2*self.E_log_det_Lambda
 
-        self.E_log_p_Lambda -= self.nu*np.einsum('Dd, mDd -> ', self.Sigma_0, self.Psi)/2
+        self.E_log_p_Lambda -= self.nu*np.einsum('Dd, mDd -> m', self.Phi_0, self.Psi)/2
 
-        self.E_log_p_Lambda -= self.nu_0*self.D/2*np.log(2) + self.nu_0/2*np.linalg.det(self.Lambda_0)
+        self.E_log_p_Lambda -= self.nu_0*self.D/2*np.log(2) + self.nu_0/2*np.linalg.slogdet(self.Psi_0)[1]
 
         self.E_log_p_Lambda -= multigammaln(self.nu_0/2, self.D)
 
@@ -259,13 +275,13 @@ class GaussianMixtureModel:
 
     def update_E_log_p(self) -> None:
 
-        self.update_E_log_p_pi()
+        self.update_E_log_p_B()
 
-        self.E_log_p = self.E_log_p_pi
+        self.E_log_p = self.E_log_p_B
 
-        self.update_E_log_p_Z_mid_pi()
+        self.update_E_log_p_Z_mid_B()
 
-        self.E_log_p += self.E_log_p_Z_mid_pi
+        self.E_log_p += self.E_log_p_Z_mid_B
 
         self.update_E_log_p_Lambda()
 
@@ -279,15 +295,29 @@ class GaussianMixtureModel:
 
         self.E_log_p += self.E_log_p_X_mid_Z_mu_Lambda
 
-    def update_E_log_q_pi(self) -> None:
+    def update_E_log_q_B(self) -> None:
 
-        self.E_log_q_pi = np.sum((self.alpha - 1)*self.E_log_pi)
+        self.E_log_q_B = (self.alpha + self.omega - 2)*psi(self.alpha + self.omega)
 
-        self.E_log_q_pi += gammaln(self.alpha.sum()) - gammaln(self.alpha).sum()
+        self.E_log_q_B -= (self.alpha - 1)*psi(self.alpha) + (self.omega - 1)*psi(self.omega)
+
+        self.E_log_q_B -= betaln(self.alpha, self.omega)
+
+        self.E_log_q_B = self.E_log_q_B.sum()
 
     def update_E_log_q_Z(self) -> None:
 
         self.E_log_q_Z = np.log(self.gamma**self.gamma).sum()
+
+    def update_E_log_q_Lambda(self) -> None:
+
+        self.E_log_q_Lambda = (self.nu - self.D - 1)/2*self.E_log_det_Lambda - self.nu*self.D/2
+
+        self.E_log_q_Lambda -= self.nu*self.D/2*np.log(2) + self.nu/2*np.linalg.slogdet(self.Psi)[1]
+
+        self.E_log_q_Lambda -= multigammaln(self.nu/2, self.D)
+
+        self.E_log_q_Lambda = self.E_log_q_Lambda.sum()
 
     def update_E_log_q_mu_mid_Lambda(self) -> None:
 
@@ -297,21 +327,11 @@ class GaussianMixtureModel:
 
         self.E_log_q_mu_mid_Lambda = self.E_log_q_mu_mid_Lambda.sum()/2
 
-    def update_E_log_q_Lambda(self) -> None:
-
-        self.E_log_q_Lambda = (self.nu - self.D - 1)/2*self.E_log_det_Lambda - self.nu*self.D/2
-
-        self.E_log_q_Lambda -= self.nu*self.D/2*np.log(2) + self.nu/2*np.linalg.det(self.Psi)
-
-        self.E_log_q_Lambda -= multigammaln(self.nu/2, self.D)
-
-        self.E_log_q_Lambda = self.E_log_q_Lambda.sum()
-
     def update_E_log_q(self) -> None:
 
-        self.update_E_log_q_pi()
+        self.update_E_log_q_B()
 
-        self.E_log_q = self.E_log_q_pi
+        self.E_log_q = self.E_log_q_B
 
         self.update_E_log_q_Z()
 
@@ -335,7 +355,7 @@ class GaussianMixtureModel:
 
         self.ELBO -= self.E_log_q
 
-        self.ell.append(self.ELBO)
+        self.HISTORY.append(self.ELBO)
 
     def estimate_Z(self) -> None:
 
@@ -343,7 +363,11 @@ class GaussianMixtureModel:
 
     def estimate_pi(self) -> None:
 
-        self.pi = self.alpha/self.alpha.sum()
+        self.pi = self.alpha/(self.alpha + self.omega)
+
+        self.pi *= np.cumprod(self.omega/(self.alpha + self.omega))
+
+        self.pi /= self.omega/(self.alpha + self.omega)
 
     def estimate_Sigma(self) -> None:
 
@@ -365,11 +389,11 @@ class GaussianMixtureModel:
 
     def fit_parameters(self, MAX : int = 100, TOL : float = 1e-3) -> None:
 
-        self.t = -time.time()
+        self.Delta = -time.time()
 
         self.initialize_parameters()
 
-        for self.i in np.arange(start = 1, stop = MAX + 1):
+        for self.ITER in np.arange(start = 1, stop = MAX + 1):
 
             self.RAE = self.ELBO
 
@@ -385,24 +409,24 @@ class GaussianMixtureModel:
 
                 break
 
-        self.ell = np.array(self.ell)
+        self.HISTORY = np.array(self.HISTORY)
 
         self.estimate_parameters()
 
-        self.t += time.time()
+        self.Delta += time.time()
 
         if self.RAE >= TOL:
 
-            self.b = False
+            self.CONVERGED = False
 
             print('\nO algoritmo não convergiu\n')
 
         else:
 
-            self.b = True
+            self.CONVERGED = True
 
-            print(f'\nTempo Total em segundos: {self.t}\n')
+            print(f'\nTempo Total em segundos: {self.Delta:0.5f}\n')
 
-            print(f'Número Total de Iterações: {self.i}\n')
+            print(f'Número Total de Iterações: {self.ITER}\n')
 
-            print(f'Erro Absoluto Relativo: {self.RAE}\n')
+            print(f'Erro Absoluto Relativo: {self.RAE:0.5f}\n')
