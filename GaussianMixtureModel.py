@@ -81,7 +81,7 @@ class GaussianMixtureModel:
 
         self.ELBO = 0
 
-        self.H = []
+        self.ell = []
 
         self.Z = np.zeros(shape = self.N)
 
@@ -91,11 +91,13 @@ class GaussianMixtureModel:
 
         self.Lambda = np.zeros(shape = (self.M, self.D, self.D))
 
-        self.F = 0
+        self.i = 0
 
-        self.T = 0
+        self.t = 0
 
-        self.delta = 0
+        self.RAE = 0
+
+        self.b = None
 
     def initialize_parameters(self) -> None:
 
@@ -215,9 +217,9 @@ class GaussianMixtureModel:
 
     def update_E_log_p_pi(self) -> None:
 
-        self.E_log_p_pi = gammaln(self.M*self.alpha_0) - self.M*gammaln(self.alpha_0)
+        self.E_log_p_pi = (self.alpha_0 - 1)*self.E_log_pi.sum()
 
-        self.E_log_p_pi += (self.alpha_0 - 1)*self.E_log_pi.sum()
+        self.E_log_p_pi += gammaln(self.M*self.alpha_0) - self.M*gammaln(self.alpha_0)
 
     def update_E_log_p_Z_mid_pi(self) -> None:
 
@@ -237,21 +239,21 @@ class GaussianMixtureModel:
 
     def update_E_log_p_mu_mid_Lambda(self) -> None:
 
-        self.E_log_p_mu_mid_Lambda = np.einsum('mD, mDd, md -> m', self.mu - self.mu_0, self.Phi, self.mu - self.mu_0)
+        self.E_log_p_mu_mid_Lambda = self.D*np.log(self.tau_0) + self.E_log_det_Lambda
 
-        self.E_log_p_mu_mid_Lambda *= -self.tau_0*self.nu
+        self.E_log_p_mu_mid_Lambda -= self.D*np.log(2*np.pi) + self.D*self.tau_0/self.tau
 
-        self.E_log_p_mu_mid_Lambda += self.D*np.log(self.tau_0/(2*np.pi)) + self.E_log_det_Lambda - self.D*self.tau_0/self.tau
+        self.E_log_p_mu_mid_Lambda -= self.tau_0*self.nu*np.einsum('mD, mDd, md -> m', self.mu - self.mu_0, self.Phi, self.mu - self.mu_0)
 
         self.E_log_p_mu_mid_Lambda = self.E_log_p_mu_mid_Lambda.sum()/2
 
     def update_E_log_p_X_mid_Z_mu_Lambda(self) -> None:
 
-        self.E_log_p_X_mid_Z_mu_Lambda = -self.nu*np.einsum('mD, mDd, md -> m', self.X_barra - self.mu, self.Psi, self.X_barra - self.mu)
+        self.E_log_p_X_mid_Z_mu_Lambda = self.E_log_det_Lambda - self.D/self.tau - self.D*np.log(2*np.pi) 
+
+        self.E_log_p_X_mid_Z_mu_Lambda -= self.nu*np.einsum('mD, mDd, md -> m', self.X_barra - self.mu, self.Psi, self.X_barra - self.mu)
 
         self.E_log_p_X_mid_Z_mu_Lambda -= self.nu*np.einsum('mDd, mDd -> m', self.S_barra, self.Psi)
-
-        self.E_log_p_X_mid_Z_mu_Lambda += self.E_log_det_Lambda - self.D/self.tau - self.D*np.log(2*np.pi)
 
         self.E_log_p_X_mid_Z_mu_Lambda = np.sum(self.N_barra*self.E_log_p_X_mid_Z_mu_Lambda)/2
 
@@ -279,9 +281,9 @@ class GaussianMixtureModel:
 
     def update_E_log_q_pi(self) -> None:
 
-        self.E_log_q_pi = gammaln(self.alpha.sum()) - gammaln(self.alpha).sum()
+        self.E_log_q_pi = np.sum((self.alpha - 1)*self.E_log_pi)
 
-        self.E_log_q_pi += np.sum((self.alpha - 1)*self.E_log_pi)
+        self.E_log_q_pi += gammaln(self.alpha.sum()) - gammaln(self.alpha).sum()
 
     def update_E_log_q_Z(self) -> None:
 
@@ -289,9 +291,9 @@ class GaussianMixtureModel:
 
     def update_E_log_q_mu_mid_Lambda(self) -> None:
 
-        self.E_log_q_mu_mid_Lambda = self.E_log_det_Lambda - self.D
+        self.E_log_q_mu_mid_Lambda = self.E_log_det_Lambda + self.D*np.log(self.tau)
 
-        self.E_log_q_mu_mid_Lambda += self.D*np.log(self.tau/(2*np.pi))
+        self.E_log_q_mu_mid_Lambda -= self.D*np.log(2*np.pi) + self.D
 
         self.E_log_q_mu_mid_Lambda = self.E_log_q_mu_mid_Lambda.sum()/2
 
@@ -333,7 +335,7 @@ class GaussianMixtureModel:
 
         self.ELBO -= self.E_log_q
 
-        self.H.append(self.ELBO)
+        self.ell.append(self.ELBO)
 
     def estimate_Z(self) -> None:
 
@@ -363,34 +365,44 @@ class GaussianMixtureModel:
 
     def fit_parameters(self, MAX : int = 100, TOL : float = 1e-3) -> None:
 
-        self.T = -time.time()
+        self.t = -time.time()
 
         self.initialize_parameters()
 
-        for self.F in np.arange(start = 1, stop = MAX + 1):
+        for self.i in np.arange(start = 1, stop = MAX + 1):
 
-            self.delta = self.ELBO
+            self.RAE = self.ELBO
 
             self.update_parameters()
 
             self.update_ELBO()
 
-            self.delta -= self.ELBO
+            self.RAE -= self.ELBO
 
-            self.delta = np.abs(self.delta/self.ELBO)
+            self.RAE = np.abs(self.RAE/self.ELBO)
             
-            if self.delta < TOL:
+            if self.RAE < TOL:
 
                 break
 
-        self.H = np.array(self.H)
+        self.ell = np.array(self.ell)
 
         self.estimate_parameters()
 
-        self.T += time.time()
+        self.t += time.time()
 
-        print(f'\nTempo Total em segundos: {self.T}\n')
+        if self.RAE >= TOL:
 
-        print(f'Número Total de Iterações: {self.F}\n')
+            self.b = False
 
-        print(f'Erro Absoluto Relativo Final: {self.delta}\n')
+            print('\nO algoritmo não convergiu\n')
+
+        else:
+
+            self.b = True
+
+            print(f'\nTempo Total em segundos: {self.t}\n')
+
+            print(f'Número Total de Iterações: {self.i}\n')
+
+            print(f'Erro Absoluto Relativo: {self.RAE}\n')
